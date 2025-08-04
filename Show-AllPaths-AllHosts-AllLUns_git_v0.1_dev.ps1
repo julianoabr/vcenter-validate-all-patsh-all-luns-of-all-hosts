@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 #Requires -Version 5.1
 
 <#
@@ -16,7 +16,7 @@
 .CREATOR
    Juliano Alves de Brito Ribeiro (find me at julianoalvesbr@live.com or https://github.com/julianoabr or https://youtube.com/@powershellchannel)
 .VERSION
-   0.2
+   0.3
 .ENVIRONMENT
    Production
 .TO THINK
@@ -38,8 +38,6 @@ Set-executionpolicy -Scope CurrentUser -ExecutionPolicy Unrestricted -Verbose -F
 
 Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
 
-$outputPath = "$env:SystemDrive\Output\Vsphere\ESXiHost\Paths"
-
 #VALIDATE IF OPTION IS NUMERIC
 function isNumeric ($x) {
     $x2 = 0
@@ -47,9 +45,8 @@ function isNumeric ($x) {
     return $isNum
 } #end function is Numeric
 
-
 #FUNCTION CONNECT TO VCENTER
-function Connect-ToVcenterServer
+function ConnectTo-vCenterServer
 {
     [CmdletBinding()]
     Param
@@ -65,12 +62,12 @@ function Connect-ToVcenterServer
         [Parameter(Mandatory=$false,
                    ValueFromPipelineByPropertyName=$true,
                    Position=1)]
-        [ValidateSet('vc1','vc2','vc3','vc4','vc5','vc6','vc7')]
+        [ValidatValidateSet('vc1','vc2','vc3','vc4','vc5','vc6','vc7')]
         [System.String]$vCenterToConnect, 
         
         [Parameter(Mandatory=$false,
                    Position=2)]
-        [System.String[]]$VCServers, 
+        [System.String[]]$vCSrvList, 
                 
         [Parameter(Mandatory=$false,
                    Position=3)]
@@ -108,23 +105,25 @@ function Connect-ToVcenterServer
         $i = 0
 
         #MENU SELECT VCENTER
-        foreach ($vcServer in $vcServers){
+        foreach ($vcServer in $vCSRVList){
 	   
                 $vcServerValue = $vcServer
 	    
                 Write-Output "            [$i].- $vcServerValue ";	
-	            $i++	
+	            
+                $i++	
+                
                 }#end foreach	
                 Write-Output "            [$i].- Exit this script ";
 
                 while(!(isNumeric($tmpWorkingLocationNum)) ){
-	                $tmpWorkingLocationNum = Read-Host "Type Vcenter Number that you want to connect"
+	                $tmpWorkingLocationNum = Read-Host -Prompt "Type the number of vCenter that you want to Log In"
                 }#end of while
 
                     $workingLocationNum = ($tmpWorkingLocationNum / 1)
 
                 if(($WorkingLocationNum -ge 0) -and ($WorkingLocationNum -le ($i-1))  ){
-	                $Script:WorkingServer = $vcServers[$WorkingLocationNum]
+	                $Script:WorkingServer = $vCSrvList[$WorkingLocationNum]
                 }
                 else{
             
@@ -134,19 +133,19 @@ function Connect-ToVcenterServer
                 }#end of else
 
         #Connect to Vcenter
-        $Script:vcInfo = Connect-VIServer -Server $Script:WorkingServer -Port $port -WarningAction Continue -ErrorAction Continue
+        $vcInfo = Connect-VIServer -Server $Script:WorkingServer -Port $port -WarningAction Continue -ErrorAction Continue
   
     
     }#end of Else Method to Connect
 
 }#End of Function Connect to Vcenter
 
+
 #DEFINE VCENTER LIST
 $vcServerList = @();
 
 #ADD OR REMOVE vCenters - Insert FQDN of your vCenter(s)        
 $vcServerList = ('vc1','vc2','vc3','vc4','vc5','vc6','vc7') | Sort-Object
-
 
 Do
 {
@@ -173,16 +172,22 @@ if ($tmpMethodToConnect -match "^\bautomatic\b$"){
 
     $tmpVC = Read-Host "Write the hostname of VC that you want to connect"
 
-    Connect-ToVcenterServer -vCenterToConnect $tmpVC -suffix $tmpSuffix -methodToConnect Automatic
+    ConnectTo-vCenterServer -vCenterToConnect $tmpVC -suffix $tmpSuffix -methodToConnect Automatic
+
 
 }
 else{
 
-    Connect-ToVcenterServer -methodToConnect $tmpMethodToConnect -VCServers $vcServerList
+    ConnectTo-vCenterServer -methodToConnect $tmpMethodToConnect -vCSrvList $vcServerList
 
-}
+}#end of else
 
+###################################################################################################################################################################
 #MAIN SCRIPT
+
+#Define Variables
+
+$outputPath = "$env:SystemDrive\Output\Vsphere\ESXiHost\Paths"
 
 $actualDate = (Get-date -Format "ddMMyyyy-HHmm").ToString()
 
@@ -190,31 +195,49 @@ $ESXiHostList = @()
 
 $dsNameList = @()
 
-#HOSTS
-$ESXiHostList = (Get-VMHost | Select-Object -ExpandProperty Name | Sort-Object)
+#HOSTS - Get only hosts poweredon and connected
+$ESXiHostList = (Get-VMHost | Where-Object -FilterScript {($PSItem.ConnectionState -eq 'Connected' -or $PSItem.ConnectionState -eq 'Maintenance') -and ($PSItem.PowerState -eq 'PoweredOn')} | Select-Object -ExpandProperty Name | Sort-Object)
+
+$totalESXiHosts = $ESXiHostList.Count
+
+$esxiCounter = 1
 
 #Datastores
-$dsNameList = (Get-Datastore | Where-Object -FilterScript {$PSItem.ExtensionData.Info.Vmfs.Local -eq $false} | Select-Object -ExpandProperty Name | Sort-Object)
+$dsNameList = (Get-Datastore | Where-Object -FilterScript {($Psitem.Accessible -eq $true) -and ($Psitem.State -eq 'AVailable') -and ($PSItem.ExtensionData.Info.Vmfs.Local -eq $false)} | Select-Object -ExpandProperty Name | Sort-Object)
 
+$totalDAtastores = $dsNameList.Count
 
 foreach ($ESXiHost in $ESXiHostList){
     
+    # Parent progress
+    Write-Progress -Activity "Getting ESXi Datastore Info" -Status "Processing Host $esxiCounter of $totalESXiHosts" -PercentComplete (($esxiCounter / $totalESXiHosts) * 100) -id 1
         
+    $dsCounter = 1
+
     foreach ($dsName in $dsNameList)
     {
-        
+                        
+        # Child progress (nested within the parent)
+        Write-Progress -Id 2 -ParentId 1 -Activity "Colecting Information of DS $dsCounter" -Status "DS $dscounter of $totalDatastores" -PercentComplete (($dsCounter / $totalDatastores) * 100)
+
         $dsObj = Get-Datastore -Name $dsName
+
+        #for test purpose only
+        #$dsObj = Get-Datastore -Name 'DS-TESTE-NAME'
 
         $dsNAADevice = $dsObj.ExtensionData.Info.Vmfs.Extent.DiskName
 
-        $esxcli = Get-EsxCli -VMHost $ESXiHost
+        #$esxcli = Get-EsxCli -VMHost $ESXiHost
 
-        $esxcli.storage.core.path.list() | Where-Object {$_.Device -match $dsNAADevice} | Select-Object -Property @{n='ESXi_Name';e={$ESXiHost}},Device,@{n='DS_Name';e={$dsName}},AdapterIdentifier,RunTimeName,State |
+        $esxcli = get-esxcli -V2 -VMHost $ESXiHost
+
+        $esxcli.storage.core.path.list.Invoke() | Where-Object {$_.Device -match $dsNAADevice} | Select-Object -Property @{n='ESXi_Name';e={$ESXiHost}},Device,@{n='DS_Name';e={$dsName}},Adapter,AdapterIdentifier,RunTimeName,State |
 Export-Csv -Path "$outputPath\AllPaths-AllHosts-$Script:WorkingServer-$actualDate.csv" -NoTypeInformation -Append
-
+        
+        $dsCounter++
 
     }#end of foreach DS
 
- 
+    $esxiCounter++
 
 }#end forEach Esxi Host
